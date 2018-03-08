@@ -87,8 +87,7 @@ class lstmRNN:
             self.x    = self.inputs_encoded[t]
             self.xs[t]= self.inputs_encoded[t]
             
-            self.LSTM_L.hx = np.hstack((prev_h, self.x));
-           
+            self.LSTM_L.hx = np.hstack((prev_h, self.x));          
             c,h,f,i,m,o = self.LSTM_L.fwd_pass()
             # bookkeeping
             self.cls[t] = c
@@ -131,13 +130,13 @@ class lstmRNN:
         b_grad  = np.zeros(self.lenOut)
                                 
         hlxf_grad  = np.zeros((self.sizeHidden,self.LSTM_L.lenIn));
-        hrxf_grad  = np.zeros((self.sizeHidden,self.LSTM_R.lenIn));   
+        hrxf_grad  = np.zeros((self.sizeHidden,self.LSTM_L.lenIn));   
         hlxi_grad  = np.zeros((self.sizeHidden,self.LSTM_L.lenIn));
-        hrxi_grad  = np.zeros((self.sizeHidden,self.LSTM_R.lenIn));
+        hrxi_grad  = np.zeros((self.sizeHidden,self.LSTM_L.lenIn));
         hlxm_grad  = np.zeros((self.sizeHidden,self.LSTM_L.lenIn));
-        hrxm_grad  = np.zeros((self.sizeHidden,self.LSTM_R.lenIn));
+        hrxm_grad  = np.zeros((self.sizeHidden,self.LSTM_L.lenIn));
         hlxo_grad  = np.zeros((self.sizeHidden,self.LSTM_L.lenIn));
-        hrxo_grad  = np.zeros((self.sizeHidden,self.LSTM_R.lenIn));
+        hrxo_grad  = np.zeros((self.sizeHidden,self.LSTM_L.lenIn));
 
         flb_grad   = np.zeros((self.sizeHidden));
         frb_grad   = np.zeros((self.sizeHidden)); 
@@ -169,7 +168,7 @@ class lstmRNN:
             dh[t] = np.dot(self.W.T,dy) 
                                 
         for t in reversed(range(0,self.lenRec)):                 
-            dhl = dh[t,:self.sizeHidden] + h2next_grad         
+            dhl = dh[t][0:self.sizeHidden] + h2next_grad         
             x_grad  = np.zeros(self.lenIn)
             
             if(t > 0):
@@ -194,7 +193,7 @@ class lstmRNN:
         h2next_grad  = np.zeros(self.sizeHidden)     
         c2next_grad  = np.zeros(self.sizeHidden)
         for t in range(0,self.lenRec):                 
-            dhr = dh[t,self.sizeHidden:] + h2next_grad         
+            dhr = dh[t][self.sizeHidden:] + h2next_grad         
             x_grad  = np.zeros(self.lenIn)
             
             if(t < self.lenRec-1):
@@ -205,7 +204,7 @@ class lstmRNN:
             self.LSTM_R.hx = np.hstack((prev_h,self.xs[t]))
             self.LSTM_R.c  = self.crs[t]
 
-            dhrxf, dhrxi, dhrxm, dhrxo, dbrf, dbri, dbrm, dbro,c2next_grad, h2next_grad,x_grad =             self.LSTM_R.bwd_pass( dhr, prev_c, self.frg[t],self.irg[t],self.mrc[t],self.org[t], c2next_grad);
+            dhrxf, dhrxi, dhrxm, dhrxo, dbrf, dbri, dbrm, dbro,c2next_grad, h2next_grad,x_grad = self.LSTM_R.bwd_pass( dhr, prev_c, self.frg[t],self.irg[t],self.mrc[t],self.org[t], c2next_grad);
             
             hrxf_grad  +=  dhrxf
             hrxi_grad  +=  dhrxi
@@ -216,8 +215,8 @@ class lstmRNN:
             mrb_grad   +=  dbrm
             orb_grad   +=  dbro
                                 
-        self.LSTM_L.update(hlxf_grad/self.lenRec, hlxi_grad/self.lenRec,                           hlxm_grad/self.lenRec, hlxo_grad/self.lenRec,                            flb_grad /self.lenRec, ilb_grad /self.lenRec,                            mlb_grad /self.lenRec, olb_grad /self.lenRec)
-        self.LSTM_R.update(hrxf_grad/self.lenRec, hrxi_grad/self.lenRec,                           hrxm_grad/self.lenRec, hrxo_grad/self.lenRec,                            frb_grad /self.lenRec, irb_grad /self.lenRec,                            mrb_grad /self.lenRec, orb_grad /self.lenRec)                                          
+        self.LSTM_L.update(hlxf_grad/self.lenRec, hlxi_grad/self.lenRec, hlxm_grad/self.lenRec, hlxo_grad/self.lenRec,                                                flb_grad /self.lenRec, ilb_grad /self.lenRec, mlb_grad /self.lenRec, olb_grad /self.lenRec)
+        self.LSTM_R.update(hrxf_grad/self.lenRec, hrxi_grad/self.lenRec, hrxm_grad/self.lenRec, hrxo_grad/self.lenRec,                                                frb_grad /self.lenRec, irb_grad /self.lenRec, mrb_grad /self.lenRec, orb_grad /self.lenRec)                                          
                          
                                                   
         self.update(W_grad/self.lenRec,b_grad/self.lenRec);
@@ -232,10 +231,10 @@ class lstmRNN:
     def inference(self,xs):
         # fwd layer
         prev_h = np.zeros_like(self.hls_infer[0])
+        y,p = np.zeros_like(self.ys)
         for t in range(0,self.lenRec):
             # update input
-            self.x    = xs[t]
-            
+            self.x    = xs[t]         
             self.LSTM_L.hx = np.hstack((prev_h, self.x));
            
             c,h,f,i,m,o = self.LSTM_L.fwd_pass()
@@ -248,10 +247,8 @@ class lstmRNN:
         prev_h = np.zeros_like(self.hrs[0])                 
         for t in reversed(range(0,self.lenRec)):
             # update input
-            self.x    = xs[t]
-            
-            self.LSTM_R.hx = np.hstack((prev_h, self.x));
-           
+            self.x    = xs[t]           
+            self.LSTM_R.hx = np.hstack((prev_h, self.x));          
             c,h,f,i,m,o = self.LSTM_R.fwd_pass()
             # bookkeeping
             self.hrs_infer[t] = h
@@ -259,13 +256,12 @@ class lstmRNN:
             prev_h = self.hrs_infer[t]
                            
             # output layer - fully connected layer
-        y = np.dot(self.W,np.hstack((self.hls_infer[self.lenRec-1],self.hrs_infer[self.lenRec-1]))) + self.b 
-        p = softmax(y)
+            y[t] = np.dot(self.W,np.hstack((self.hls_infer[t],self.hrs_infer[t]))) + self.b 
+            p[t] = softmax(y[t])
              
-        return np.random.choice(range(self.lenOut), p=p.ravel())
+        #return np.random.choice(range(self.lenOut), p=p.ravel())
+        return p;
   
-
-
 # In[19]:
 
 class LSTM:
@@ -353,15 +349,15 @@ class LSTM:
     
     def update(self, f_grad, i_grad, m_grad, o_grad, fb_grad, ib_grad, mb_grad, ob_grad):
 
-        self.GfW = 0.9*self.GfW + 0.1*f_grad**2
-        self.GiW = 0.9*self.GiW + 0.1*i_grad**2
-        self.GmW = 0.9*self.GmW + 0.1*m_grad**2
-        self.GoW = 0.9*self.GoW + 0.1*o_grad**2
+        self.GfW = self.GfW + f_grad**2
+        self.GiW = self.GiW + i_grad**2
+        self.GmW = self.GmW + m_grad**2
+        self.GoW = self.GoW + o_grad**2
         
-        self.Gfb = 0.9*self.Gfb + 0.1*fb_grad**2
-        self.Gib = 0.9*self.Gib + 0.1*ib_grad**2
-        self.Gmb = 0.9*self.Gmb + 0.1*mb_grad**2
-        self.Gob = 0.9*self.Gob + 0.1*ob_grad**2
+        self.Gfb = self.Gfb + fb_grad**2
+        self.Gib = self.Gib + ib_grad**2
+        self.Gmb = self.Gmb + mb_grad**2
+        self.Gob = self.Gob + ob_grad**2
         
         self.fW -= self.learningRate/np.sqrt(self.GfW + 1e-8) * f_grad
         self.iW -= self.learningRate/np.sqrt(self.GiW + 1e-8) * i_grad
