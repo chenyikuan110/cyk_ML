@@ -178,8 +178,10 @@ class basicRNN:
 
     def inference(self,xs):
         # fwd layer
-        prev_h = np.zeros_like(self.hls_infer[0])
-        y,p = np.zeros_like(self.ys)
+        #prev_h = np.zeros_like(self.hls_infer[0])
+        prev_h = self.hls_infer[lenRec-1]
+        y = np.zeros_like(self.ys)
+        p = np.zeros_like(self.ys)
         for t in range(0,self.lenRec):
             # update input
             self.x    = xs[t]
@@ -209,7 +211,6 @@ class basicRNN:
         #print(p)
         #return np.random.choice(range(self.lenOut), p=p.ravel())
         return p;
-  
 
 
 # In[8]:
@@ -280,14 +281,14 @@ class RNN_cell:
 
         # adagrad
         self.GhlxW = self.GhlxW + hlxW_grad**2
-        self.Ghlb  = self.Ghlb  + hlb_grad**2
+        self.Ghlb = self.Ghlb + hlb_grad**2
         self.GhrxW = self.GhrxW + hrxW_grad**2
-        self.Ghrb  = self.Ghrb  + hrb_grad**2
+        self.Ghrb = self.Ghrb + hrb_grad**2
         
         self.hlxW -= self.learningRate/np.sqrt(self.GhlxW + 1e-8) * hlxW_grad
-        self.hlb  -= self.learningRate/np.sqrt(self.Ghlb + 1e-8)  * hlb_grad
+        self.hlb -= self.learningRate/np.sqrt(self.Ghlb + 1e-8) * hlb_grad
         self.hrxW -= self.learningRate/np.sqrt(self.GhrxW + 1e-8) * hrxW_grad
-        self.hrb  -= self.learningRate/np.sqrt(self.Ghrb + 1e-8)  * hrb_grad
+        self.hrb -= self.learningRate/np.sqrt(self.Ghrb + 1e-8) * hrb_grad
         
 
 
