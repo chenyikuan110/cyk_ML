@@ -1,24 +1,10 @@
 
 # coding: utf-8
-import numpy as np
-import copy
+
 # In[1]:
 
-def encode(idx,num_entry):
-    ret = np.zeros(num_entry)
-    ret[idx] = 1
-    return ret;
-
-def encode_array(array,num_entry):
-    xs = np.zeros((len(array),num_entry))
-    for i in range(len(array)):
-        xs[i][array[i]] = 1; 
-    return xs;
-
-
-# In[2]:
-
-
+import numpy as np
+import copy
 
 # Helper functions
 def softmax(array):
@@ -36,16 +22,26 @@ def tanh(x):
 def tanh_deriv(y):
     return 1 - pow(np.tanh(y),2)
 
-# RNN
-class myRNN:
+# Partially Recurrent Network - partially-fully dropout recurrent net
+# 
+# i    h     
+# i    h     o
+# i          o
+# i    h     o
+# i    h     o
+# i    h     
+#
+class hFFLSTMRNN:
     
-    def __init__ (self, lenIn, lenOut, lenRec, sizeHidden, inputs_encoded, targets, learningRate,dropout_threshold):
+    def __init__ (self, lenIn, lenOut, lenRec, sizeHidden, lenInRec, hiddenRec,                  inputs_encoded, targets,                   learningRate, dropout_threshold):
         
         # Hyper parameters
         self.lenIn          = lenIn
         self.lenOut         = lenOut
         self.lenRec         = lenRec
         self.sizeHidden     = sizeHidden
+        self.lenInRec       = lenInRec
+        self.hiddenRec      = hiddenRec
         self.learningRate   = learningRate
         self.dropout_threshold = dropout_threshold
         
@@ -57,7 +53,7 @@ class myRNN:
         self.x  = np.zeros(lenIn)  
         self.y  = np.zeros(lenOut)
         self.h  = np.zeros(sizeHidden)
-        self.c  = np.zeros(sizeHidden)
+        self.c  = np.zeros(hiddenRec)
         
         self.W  = np.zeros((lenOut,sizeHidden)) # for the last fully connected layer
         self.GW = np.zeros((lenOut,sizeHidden)) # Gradient, for W-update using RMSprop
@@ -67,17 +63,18 @@ class myRNN:
         # for training phase 
         self.xs = np.zeros((lenRec,lenIn))
         self.ys = np.zeros((lenRec,lenOut))
-        self.cs = np.zeros((lenRec,sizeHidden))
+        self.cs = np.zeros((lenRec,hiddenRec))
         self.hs = np.zeros((lenRec,sizeHidden))
         
         # for training phase bookkeeping
-        self.fg = np.zeros((lenRec,sizeHidden)) # forget gate
-        self.ig = np.zeros((lenRec,sizeHidden)) # input  gate
-        self.og = np.zeros((lenRec,sizeHidden)) # output gate
-        self.mc = np.zeros((lenRec,sizeHidden)) # memory cell state (candidate)
+        self.fg = np.zeros((lenRec,hiddenRec)) # forget gate
+        self.ig = np.zeros((lenRec,hiddenRec)) # input  gate
+        self.og = np.zeros((lenRec,hiddenRec)) # output gate
+        self.mc = np.zeros((lenRec,hiddenRec)) # memory cell state (candidate)
         
         # LSTM class
-        self.LSTM = LSTM(sizeHidden+lenIn,sizeHidden,lenRec,learningRate)
+        self.LSTM_Rec = LSTM(lenInRec+hiddenRec,hiddenRec,lenRec,learningRate)
+        self.FF       = FF(lenIn-lenInRec,sizeHidden-hiddenRec,lenRec,learningRate)
         
         # Dropout vector
         self.dvo = np.zeros((lenRec,sizeHidden));
@@ -99,22 +96,28 @@ class myRNN:
                     self.dvo[t][i] = 1;
                 else:
                     self.dvo[t][i] = 0;
+                    
             # update input
             self.x    = self.inputs_encoded[t]
             self.xs[t]= self.inputs_encoded[t]
             
-            self.LSTM.hx = np.hstack((prev_h, self.x));
-            self.LSTM.dvo = self.dvo[t];
+            # Recurrent part
+            self.LSTM_Rec.hx = np.hstack((prev_h[:self.hiddenRec], self.x[:self.lenInRec]));
+            self.LSTM_Rec.dvo = self.dvo[t][:self.hiddenRec];     
+            cR, hR, fR, iR, mR, oR = self.LSTM_Rec.fwd_pass()            
+            self.cs[t] = cR
+            self.hs[t][:self.hiddenRec] = hR
+            self.fg[t] = fR
+            self.ig[t] = iR
+            self.mc[t] = mR
+            self.og[t] = oR
             
-            c, h, f, i, m, o = self.LSTM.fwd_pass()
-            # bookkeeping
-            self.cs[t] = c
-            self.hs[t] = h
-            self.fg[t] = f
-            self.ig[t] = i
-            self.mc[t] = m
-            self.og[t] = o
-            
+            # Feed forward part 
+            self.FF.x  = self.x[self.lenInRec:];
+            self.FF.dvo = self.dvo[t][self.hiddenRec:];     
+            hN = self.FF.fwd_pass()            
+            self.hs[t][self.hiddenRec:] = hN
+      
             # output layer - fully connected layer
             self.ys[t] = np.dot(self.W,self.hs[t]) + self.b
             prev_h = self.hs[t]
@@ -124,7 +127,7 @@ class myRNN:
     def bwd_pass(self):        
 
         avg_loss = 0; # using cross entropy average
-        c2next_grad  = np.zeros(self.sizeHidden)
+        c2next_grad  = np.zeros(self.hiddenRec)
         h2next_grad  = np.zeros(self.sizeHidden)
         
         # output bp
@@ -132,15 +135,18 @@ class myRNN:
         b_grad  = np.zeros(self.lenOut)
         
         # LSTM internal bp
-        hxf_grad   = np.zeros((self.sizeHidden,self.LSTM.lenIn));
-        hxi_grad   = np.zeros((self.sizeHidden,self.LSTM.lenIn));
-        hxm_grad   = np.zeros((self.sizeHidden,self.LSTM.lenIn));
-        hxo_grad   = np.zeros((self.sizeHidden,self.LSTM.lenIn));
-    
-        fb_grad   = np.zeros(self.sizeHidden)
-        ib_grad   = np.zeros(self.sizeHidden)
-        mb_grad   = np.zeros(self.sizeHidden)
-        ob_grad   = np.zeros(self.sizeHidden)
+        hxf_Rec_grad   = np.zeros((self.hiddenRec,self.LSTM_Rec.lenIn));
+        hxi_Rec_grad   = np.zeros((self.hiddenRec,self.LSTM_Rec.lenIn));
+        hxm_Rec_grad   = np.zeros((self.hiddenRec,self.LSTM_Rec.lenIn));
+        hxo_Rec_grad   = np.zeros((self.hiddenRec,self.LSTM_Rec.lenIn));
+        
+        hW_grad   = np.zeros((self.sizeHidden-self.hiddenRec,self.FF.lenIn));
+        hb_grad   = np.zeros(self.sizeHidden-self.hiddenRec)
+        
+        fb_grad   = np.zeros(self.hiddenRec)
+        ib_grad   = np.zeros(self.hiddenRec)
+        mb_grad   = np.zeros(self.hiddenRec)
+        ob_grad   = np.zeros(self.hiddenRec)
                    
         # propagates through time and layers
 
@@ -163,9 +169,7 @@ class myRNN:
             b_grad += dy
             
             dh = np.dot(self.W.T,dy) + h2next_grad
-            
-            x_grad  = np.zeros(self.lenIn)
-            
+
             if(t > 0):
                 prev_h = self.hs[t-1]
                 prev_c = self.cs[t-1]
@@ -173,40 +177,44 @@ class myRNN:
                 prev_h = np.zeros_like(self.hs[0])
                 prev_c = np.zeros_like(self.cs[0])
                 
-            self.LSTM.hx = np.hstack((prev_h,self.xs[t]));
-            self.LSTM.c = self.cs[t];
+            # LSTM RNN part
+            self.LSTM_Rec.hx = np.hstack((prev_h[:self.hiddenRec],self.xs[t][:self.lenInRec]));
+            self.LSTM_Rec.c = self.cs[t];
             
-            self.LSTM.dvo = self.dvo[t];
+            self.LSTM_Rec.dvo = self.dvo[t][:self.hiddenRec];
             
-            dhxf,dhxi,dhxm,dhxo, dbf,dbi,dbm,dbo, c2next_grad,h2next_grad,x_grad = \
-            self.LSTM.bwd_pass( dh, prev_c ,self.fg[t],self.ig[t],self.mc[t],self.og[t],\
-                                 c2next_grad);
+            dhxf,dhxi,dhxm,dhxo, dbf,dbi,dbm,dbo, c2next_grad,h2next_grad[:self.hiddenRec],x_grad =             self.LSTM_Rec.bwd_pass( dh[:self.hiddenRec], prev_c ,self.fg[t],self.ig[t],                                   self.mc[t],self.og[t],                                 c2next_grad);
             
             for ii in range(dhxo.shape[0]):
                 dhxo[ii] *= self.dvo[t][ii];   
                 
-            hxf_grad +=  dhxf;
-            hxi_grad +=  dhxi;  
-            hxm_grad +=  dhxm;  
-            hxo_grad +=  dhxo;   
+            hxf_Rec_grad +=  dhxf;
+            hxi_Rec_grad +=  dhxi;  
+            hxm_Rec_grad +=  dhxm;  
+            hxo_Rec_grad +=  dhxo;   
             
-            fb_grad +=  dbf;
-            ib_grad +=  dbi;
-            mb_grad +=  dbm;
-            ob_grad +=  np.multiply(dbo,self.dvo[t]);   
+            fb_grad[:self.hiddenRec] +=  dbf;
+            ib_grad[:self.hiddenRec] +=  dbi;
+            mb_grad[:self.hiddenRec] +=  dbm;
+            ob_grad[:self.hiddenRec] +=  np.multiply(dbo,self.dvo[t][:self.hiddenRec]);   
+            
+            # Feed-Forward part
+            self.FF.x = self.xs[t][self.lenInRec:];         
+            dhW_grad, dhb_grad    = self.FF.bwd_pass( dh[self.hiddenRec:] );   
+            hW_grad += dhW_grad;
+            hb_grad += dhb_grad;
 
-        
         # update using RMSprop
-        self.LSTM.update(hxf_grad/self.lenRec, hxi_grad/self.lenRec, \
-                           hxm_grad/self.lenRec, hxo_grad/self.lenRec, \
-                           fb_grad/self.lenRec, ib_grad/self.lenRec, \
-                           mb_grad/self.lenRec, ob_grad/self.lenRec);
-
+        self.LSTM_Rec.update(hxf_Rec_grad/self.lenRec, hxi_Rec_grad/self.lenRec,                            hxm_Rec_grad/self.lenRec, hxo_Rec_grad/self.lenRec,                            fb_grad/self.lenRec, ib_grad/self.lenRec,                            mb_grad/self.lenRec, ob_grad/self.lenRec);
+        
+        self.FF.update(hW_grad/self.lenRec, hb_grad/self.lenRec);
         
         self.update(W_grad/self.lenRec,b_grad/self.lenRec);
+        
         return avg_loss/self.lenRec;
             
-
+          
+            
     def update(self, W_grad, b_grad):
         self.GW = 0.9*self.GW + 0.1*W_grad**2;
         self.W -= self.learningRate/np.sqrt(self.GW + 1e-8) * W_grad;
@@ -216,10 +224,17 @@ class myRNN:
     def inference(self,x):
         # update input
         self.x = x
-        self.LSTM.hx = np.hstack((self.h,self.x))
-        c, h, f, i, m, o = self.LSTM.fwd_pass()
-        self.c = c
-        self.h = h
+        self.LSTM_Rec.hx = np.hstack((self.h[:self.hiddenRec], self.x[:self.lenInRec]));
+        self.LSTM_Rec.dvo = np.ones(self.hiddenRec)   
+        cR, hR, fR, iR, mR, oR = self.LSTM_Rec.fwd_pass()            
+        self.c = cR
+        self.h[:self.hiddenRec] = hR
+
+        # Feed forward part 
+        self.FF.x  = self.x[self.lenInRec:];
+        self.FF.dvo = np.ones(self.sizeHidden-self.hiddenRec)
+        hN = self.FF.fwd_pass()            
+        self.h[self.hiddenRec:] = hN
 
         # output layer - may replace with softmax instead
         self.y = np.dot(self.W,self.h) + self.b
@@ -229,17 +244,27 @@ class myRNN:
     def get_prob(self,x):
         # update input
         self.x = x
-        self.LSTM.hx = np.hstack((self.h,self.x))
-        c, h, f, i, m, o = self.LSTM.fwd_pass()
-        self.c = c
-        self.h = h
+        self.LSTM_Rec.hx = np.hstack((self.h[:self.hiddenRec], self.x[:self.lenInRec]));
+        self.LSTM_Rec.dvo = np.ones(self.hiddenRec)   
+        cR, hR, fR, iR, mR, oR = self.LSTM_Rec.fwd_pass()            
+        self.c = cR
+        self.h[:self.hiddenRec] = hR
+
+        # Feed forward part 
+        self.FF.x  = self.x[self.lenInRec:];
+        self.FF.dvo = np.ones(self.sizeHidden-self.hiddenRec)
+        hN = self.FF.fwd_pass()            
+        self.h[self.hiddenRec:] = hN
 
         # output layer - may replace with softmax instead
         self.y = np.dot(self.W,self.h) + self.b
         p   = softmax(self.y)     
-        return p[1];
+        return p[1]
+    
 
-# In[3]:
+
+# In[2]:
+
 class LSTM:
     
     def __init__ (self,lenIn,sizeHidden,lenRec,learningRate):
@@ -322,8 +347,7 @@ class LSTM:
         
         # c = c_prev * f + m * i
         c_grad  = dcs * f
-        hx_grad = np.dot(self.fW.T, df) + np.dot(self.iW.T, di) +\
-                          np.dot(self.oW.T, do) + np.dot(self.mW.T, dm)
+        hx_grad = np.dot(self.fW.T, df) + np.dot(self.iW.T, di) +                          np.dot(self.oW.T, do) + np.dot(self.mW.T, dm)
         
         
         return dhxf,dhxi,dhxm,dhxo,df,di,dm,do,c_grad,hx_grad[:self.sizeHidden],hx_grad[self.sizeHidden:];
@@ -350,3 +374,61 @@ class LSTM:
         self.mb -= self.learningRate/np.sqrt(self.Gmb + 1e-8) * mb_grad
         self.ob -= self.learningRate/np.sqrt(self.Gob + 1e-8) * ob_grad
         
+
+
+# In[4]:
+
+class FF:
+    
+    def __init__ (self,lenIn,sizeHidden,lenRec,learningRate):
+        self.lenIn        = lenIn
+        self.sizeHidden   = sizeHidden
+        self.lenRec       = lenRec
+        self.learningRate = learningRate
+        
+        # hx == x is x and h horizontally stacked together
+        self.x = np.zeros(lenIn)
+        self.h = np.zeros(sizeHidden)
+        
+        # Weight matrices
+        self.hW = np.random.random((sizeHidden,lenIn));
+                            
+        # biases
+        self.hb = np.zeros(sizeHidden);
+             
+        # for RMSprop only
+        self.GhW = np.random.random((sizeHidden,lenIn));
+        self.Ghb = np.zeros(sizeHidden); 
+        
+        # for dropout
+        self.dvo = np.zeros(sizeHidden); 
+        ''' end of LSTM.__init__ '''
+        
+    def fwd_pass(self):
+        self.h       = sigmoid(np.dot(self.hW, self.x) + self.hb)
+        #self.h       = np.multiply(self.h,self.dvo); # dropout
+        return self.h;
+    
+    def bwd_pass(self, dh):
+        
+        dh = np.clip(dh, -6, 6);       
+        dh  = sigmoid_deriv(self.h)*dh
+        dhb = dh;
+        dhW = np.dot((np.atleast_2d(dh)).T,np.atleast_2d(self.x)) 
+        
+        return dhW, dhb;
+    
+    def update(self, hW_grad, hb_grad):
+
+        self.GhW = 0.9*self.GhW+ 0.1*hW_grad**2
+        self.Ghb = 0.9*self.Ghb+ 0.1*hb_grad**2
+        
+        self.hW -= self.learningRate/np.sqrt(self.GhW + 1e-8) * hW_grad
+        self.hb -= self.learningRate/np.sqrt(self.Ghb + 1e-8) * hb_grad
+        
+
+
+# In[ ]:
+
+
+
