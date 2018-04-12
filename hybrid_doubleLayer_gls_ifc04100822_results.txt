@@ -1,0 +1,6 @@
+Scaling ratio  0.0  count= 500 :precision =  0.9484978540772532 recall =  0.884 f_score =  0.9151138716356108
+Scaling ratio  0.2  count= 343 :precision =  0.8846153846153846 recall =  0.989247311827957 f_score =  0.9340101522842639
+Scaling ratio  0.4  count= 299 :precision =  0.8032786885245902 recall =  1.0 f_score =  0.8909090909090909
+Scaling ratio  0.6  count= 283 :precision =  0.75 recall =  1.0 f_score =  0.8571428571428571
+Scaling ratio  0.8  count= 275 :precision =  0.6944444444444444 recall =  1.0 f_score =  0.819672131147541
+Scaling ratio  1.0  count= 268 :precision =  0.6206896551724138 recall =  1.0 f_score =  0.7659574468085107
